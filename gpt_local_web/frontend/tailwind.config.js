@@ -9,9 +9,9 @@ export default {
     extend: {
       colors: {
         dark: {
-          DEFAULT: '#1a1a1a',
-          lighter: '#2a2a2a',
-          darker: '#0a0a0a'
+          DEFAULT: '#2a2a2a',
+          darker: '#0a0a0a',
+          lighter: '#2a2a2a'
         }
       }
     },

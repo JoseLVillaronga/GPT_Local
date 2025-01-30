@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -7,14 +7,30 @@ import asyncio
 import sys
 import os
 import logging
+import requests
+import time
+import uuid
+
+# Agregar el directorio padre al path para poder importar test_local_llms
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(BACKEND_DIR))
+sys.path.append(PROJECT_ROOT)
+from test_local_llms import ChatHistory, ChatStats, ChatConfig, ChatExporter, get_gpt4all_models
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(BACKEND_DIR, 'backend.log')),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# Agregar el directorio padre al path para importar el módulo de chat
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from test_local_llms import ChatConfig, ChatHistory, ChatStats, ChatExporter
+# Crear directorio de exportación si no existe
+CHAT_HISTORY_DIR = os.path.join(PROJECT_ROOT, "chat_history")
+os.makedirs(CHAT_HISTORY_DIR, exist_ok=True)
 
 app = FastAPI(title="GPT Local API")
 
@@ -34,8 +50,8 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     model: str
-    service: str
     message: str
+    service: Optional[str] = "gpt4all"
 
 class ConfigUpdate(BaseModel):
     temperature: Optional[float] = None
@@ -49,58 +65,99 @@ active_sessions: Dict[str, tuple[ChatHistory, ChatStats, ChatConfig]] = {}
 
 @app.get("/api/models")
 async def get_models():
-    """Obtener lista de modelos disponibles"""
+    """Obtener lista de modelos disponibles de la API local"""
     try:
-        from test_local_llms import get_ollama_models, get_gpt4all_models
+        logger.info("Obteniendo lista de modelos disponibles...")
+        models = get_gpt4all_models()
         
-        logger.info("Obteniendo lista de modelos...")
-        ollama_models = get_ollama_models()
-        gpt4all_models = get_gpt4all_models()
+        if not models:
+            logger.warning("No se encontraron modelos disponibles")
+            return {"error": "No se encontraron modelos disponibles"}
+            
+        logger.info(f"Modelos encontrados: {models}")
         
-        logger.info(f"Modelos Ollama encontrados: {ollama_models}")
-        logger.info(f"Modelos GPT4All encontrados: {gpt4all_models}")
-        
+        # Formatear los modelos como lo espera el frontend
+        formatted_models = []
+        for model in models:
+            model_name = model.get('name', model.get('id', 'Unknown'))
+            formatted_models.append(model_name)
+            
         return {
-            "ollama": ollama_models,
-            "gpt4all": gpt4all_models
+            "models": formatted_models
         }
+    except ImportError as e:
+        logger.error(f"Error al importar módulo: {str(e)}")
+        return {"error": "Error al cargar el módulo de modelos"}
     except Exception as e:
         logger.error(f"Error al obtener modelos: {str(e)}")
-        return {"error": str(e)}
+        return {"error": f"Error al obtener modelos: {str(e)}"}
 
 @app.post("/api/chat/{session_id}")
 async def chat(session_id: str, request: ChatRequest):
     """Endpoint para chat no streaming"""
-    logger.info(f"Nueva solicitud de chat - Sesión: {session_id}, Modelo: {request.model}, Servicio: {request.service}")
+    logger.info(f"Nueva solicitud de chat - Sesión: {session_id}, Modelo: {request.model}")
     
     try:
+        # Si es una nueva sesión, generar un nuevo ID
+        if session_id == 'new':
+            session_id = str(uuid.uuid4())
+            logger.info(f"Creando nueva sesión con ID: {session_id}")
+            
+        # Si la sesión no existe, crearla
         if session_id not in active_sessions:
             history = ChatHistory()
-            history.start_new_chat(request.model, request.service)
+            history.start_new_chat(request.model, request.service)  # Esto inicializará el timestamp
             stats = ChatStats()
             config = ChatConfig()
+            # Aumentar el límite de tokens para respuestas más largas
+            config.max_tokens = 2000
             active_sessions[session_id] = (history, stats, config)
-            logger.info(f"Nueva sesión creada: {session_id}")
         
         history, stats, config = active_sessions[session_id]
         
-        # Lógica de chat según el servicio
-        if request.service.lower() == "ollama":
-            from test_local_llms import chat_with_ollama
-            logger.info("Iniciando chat con Ollama...")
-            response = chat_with_ollama(request.model, request.message, history, stats, config)
-        else:
-            from test_local_llms import chat_with_gpt4all
-            logger.info("Iniciando chat con GPT4All...")
-            response = chat_with_gpt4all(request.model, request.message, history, stats, config)
+        # Agregar mensaje del usuario al historial
+        history.add_message("user", request.message)
+        stats.increment_messages()
         
-        logger.info("Respuesta generada exitosamente")
-        return {
-            "response": response,
-            "stats": stats.get_summary()
-        }
+        start_time = time.time()
+        
+        # Hacer la llamada a la API de GPT4All
+        try:
+            response = requests.post(
+                'http://127.0.0.1:4891/v1/chat/completions',
+                json={
+                    'model': request.model,
+                    'messages': history.get_history(),
+                    'temperature': config.temperature,
+                    'max_tokens': config.max_tokens
+                }
+            )
+            
+            if response.status_code == 200:
+                response_json = response.json()
+                if 'choices' in response_json and len(response_json['choices']) > 0:
+                    assistant_response = response_json['choices'][0]['message']['content'].strip()
+                    # Agregar respuesta del asistente al historial
+                    history.add_message("assistant", assistant_response)
+                    stats.add_response_time(time.time() - start_time)
+                    
+                    logger.info("Respuesta generada exitosamente")
+                    return {
+                        "response": assistant_response,
+                        "session_id": session_id,
+                        "stats": stats.get_summary()
+                    }
+                else:
+                    raise ValueError("No se recibió una respuesta válida del modelo")
+            else:
+                raise ValueError(f"Error {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error de conexión con GPT4All: {str(e)}")
+            raise ValueError(f"Error de conexión con GPT4All: {str(e)}")
+            
     except Exception as e:
-        logger.error(f"Error en el chat: {str(e)}")
+        logger.error(f"Error en chat: {str(e)}")
         return {"error": str(e)}
 
 @app.websocket("/ws/chat/{session_id}")
@@ -176,37 +233,145 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             del active_sessions[session_id]
 
 @app.get("/api/conversations")
-async def list_conversations():
-    """Listar conversaciones guardadas"""
+async def get_conversations():
+    """Obtener lista de conversaciones guardadas"""
     try:
-        logger.info("Listando conversaciones guardadas...")
-        conversations = ChatHistory.list_saved_conversations()
-        return {"conversations": conversations}
+        chat_dir = os.path.join(PROJECT_ROOT, "chat_history")
+        if not os.path.exists(chat_dir):
+            return []
+            
+        conversations = []
+        for filename in os.listdir(chat_dir):
+            if filename.endswith('.md'):
+                filepath = os.path.join(chat_dir, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        # Leer las primeras líneas para obtener el timestamp
+                        lines = f.readlines()
+                        if len(lines) > 1:  # Asegurarse que hay al menos 2 líneas
+                            timestamp = lines[1].replace('Fecha: ', '').strip()
+                            conversations.append({
+                                'id': filename[:-3],  # Remover extensión .md
+                                'name': filename[:-3],  # Nombre sin extensión
+                                'timestamp': timestamp  # Agregar timestamp
+                            })
+                except Exception as e:
+                    logger.error(f"Error al leer archivo {filename}: {str(e)}")
+                    continue
+                    
+        # Ordenar por timestamp descendente (más reciente primero)
+        conversations.sort(key=lambda x: x['timestamp'], reverse=True)
+        return conversations
+        
     except Exception as e:
         logger.error(f"Error al listar conversaciones: {str(e)}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/conversations/{filename}")
-async def get_conversation(filename: str):
-    """Obtener contenido de una conversación"""
+@app.post("/api/conversations/{session_id}/export")
+async def export_conversation(session_id: str):
+    """Exportar una conversación a archivo markdown"""
+    logger.info(f"Intentando exportar conversación para sesión: {session_id}")
+    
     try:
-        logger.info(f"Obteniendo conversación: {filename}")
-        filepath = os.path.join(ChatExporter.CHAT_DIR, filename)
-        if filename.endswith('.pkl'):
-            chat = ChatHistory.load_conversation(filepath)
-            if chat:
-                return {
-                    "model": chat.model_name,
-                    "service": chat.service_name,
-                    "timestamp": chat.timestamp,
-                    "messages": chat.messages
-                }
-        else:  # .md o .txt
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            return {"content": content}
+        if session_id not in active_sessions:
+            logger.error(f"Sesión no encontrada: {session_id}")
+            raise HTTPException(status_code=404, detail=f"Sesión no encontrada: {session_id}")
+            
+        history, stats, _ = active_sessions[session_id]
+        logger.info(f"Exportando conversación con modelo {history.model_name} y servicio {history.service_name}")
+        
+        filename = ChatExporter.export_conversation(history, stats)
+        logger.info(f"Conversación exportada exitosamente a: {filename}")
+        
+        return {"filename": os.path.basename(filename)}
     except Exception as e:
-        logger.error(f"Error al obtener conversación: {str(e)}")
+        logger.error(f"Error al exportar conversación: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al exportar conversación: {str(e)}")
+
+@app.get("/api/conversations/{conversation_id}")
+async def load_conversation(conversation_id: str):
+    """Cargar una conversación guardada"""
+    try:
+        # El conversation_id es el nombre del archivo sin extensión
+        filename = f"{conversation_id}.md"
+        chat_dir = os.path.join(PROJECT_ROOT, "chat_history")
+        filepath = os.path.join(chat_dir, filename)
+        
+        logger.info(f"Intentando cargar conversación desde: {filepath}")
+        
+        if not os.path.exists(filepath):
+            logger.error(f"Archivo no encontrado: {filepath}")
+            raise HTTPException(status_code=404, detail="Conversación no encontrada")
+            
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # Extraer información relevante del contenido
+        lines = content.split('\n')
+        model_info = lines[0].replace('# Conversación con ', '').split(' (')
+        model_name = model_info[0]
+        service_name = model_info[1].replace(')', '')
+        
+        # Extraer los mensajes
+        messages = []
+        current_role = None
+        current_message = []
+        
+        for line in lines:
+            if line.startswith('### Usuario:'):
+                if current_role and current_message:
+                    messages.append({
+                        'role': 'assistant' if current_role == 'Asistente' else 'user',
+                        'content': '\n'.join(current_message).strip()
+                    })
+                current_role = 'Usuario'
+                current_message = []
+            elif line.startswith('### Asistente:'):
+                if current_role and current_message:
+                    messages.append({
+                        'role': 'assistant' if current_role == 'Asistente' else 'user',
+                        'content': '\n'.join(current_message).strip()
+                    })
+                current_role = 'Asistente'
+                current_message = []
+            elif current_role and line and not line.startswith('#'):
+                current_message.append(line)
+                
+        # Agregar el último mensaje si existe
+        if current_role and current_message:
+            messages.append({
+                'role': 'assistant' if current_role == 'Asistente' else 'user',
+                'content': '\n'.join(current_message).strip()
+            })
+            
+        logger.info(f"Conversación cargada exitosamente: {len(messages)} mensajes")
+        return {
+            "messages": messages,
+            "model": model_name,
+            "service": service_name,
+            "timestamp": lines[1].replace('Fecha: ', '')
+        }
+            
+    except Exception as e:
+        logger.error(f"Error al cargar conversación: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al cargar conversación: {str(e)}")
+
+@app.get("/api/conversations/{session_id}/info")
+async def get_session_info(session_id: str):
+    """Obtener información de la sesión actual"""
+    try:
+        if session_id not in active_sessions:
+            raise ValueError("Sesión no encontrada")
+            
+        history, stats, config = active_sessions[session_id]
+        return {
+            "model": history.model,
+            "service": history.service,
+            "message_count": len(history.get_history()),
+            "stats": stats.get_summary()
+        }
+    except Exception as e:
+        logger.error(f"Error al obtener información de sesión: {str(e)}")
         return {"error": str(e)}
 
 @app.put("/api/config/{session_id}")

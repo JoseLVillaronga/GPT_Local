@@ -37,7 +37,7 @@ class ChatStats:
         }
 
 class ChatExporter:
-    CHAT_DIR = "chat_history"  # Directorio unificado para todas las conversaciones
+    CHAT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_history")  # Usar path absoluto
     
     @staticmethod
     def to_markdown(history: 'ChatHistory', stats: Optional['ChatStats'] = None) -> str:
@@ -329,93 +329,68 @@ def chat_with_ollama():
             print("No se encontraron modelos disponibles")
             return
         
-        model = select_model([{'name': model} for model in models], "Ollama")
-        if not model:
+        model_name = select_model([{'name': model} for model in models], "Ollama")
+        if not model_name:
             return
-        
-        print(f"\nIniciando chat con Ollama (modelo: {model})")
-        print("Escribe 'salir' para terminar o 'clear' para limpiar el historial")
+            
+        print(f"\nIniciando chat con Ollama. Escribe 'exit' para salir, 'help' para ayuda.")
+        print(f"Usando modelo: {model_name}")
         
         history = ChatHistory()
-        history.start_new_chat(model, "Ollama")
+        history.start_new_chat(model_name, "Ollama")
         
         config = ChatConfig()
         stats = ChatStats()
         
         while True:
-            user_input = input("\nTú: ")
+            user_input = input("\nTú: ").strip()
             
-            if user_input.lower() == 'salir':
+            if user_input.lower() == 'exit':
                 break
-            elif user_input.lower() == 'clear':
-                history.clear()
-                print("\nHistorial limpiado")
-                continue
-            elif user_input.lower() == 'config':
-                config.adjust_parameters()
-                continue
-            elif user_input.lower() == 'save':
-                history.save_conversation()
-                continue
             elif user_input.lower() == 'help':
-                print("\nComandos disponibles:")
-                print("- salir: Terminar la conversación")
-                print("- clear: Limpiar el historial")
-                print("- config: Ajustar parámetros de generación")
-                print("- save: Guardar la conversación actual")
-                print("- help: Mostrar esta ayuda")
+                show_help()
                 continue
-                
+            elif not user_input:
+                continue
+            
+            # Registrar mensaje del usuario
+            history.add_message('user', user_input)
+            stats.increment_messages()
+            
+            # Enviar mensaje a Ollama
+            start_time = time.time()
             try:
-                # Agregar mensaje del usuario al historial
-                history.add_message("user", user_input)
-                stats.increment_messages()
-                
-                # Configurar el prompt para Ollama
-                messages = []
-                for msg in history.get_history():
-                    role = "system" if msg['role'] == 'assistant' else "user"
-                    messages.append({"role": role, "content": msg['content']})
-                
                 response = requests.post(
-                    'http://127.0.0.1:11434/api/generate',
+                    'http://localhost:11434/api/generate',
                     json={
-                        'model': model,
+                        'model': model_name,
                         'prompt': user_input,
-                        'system': 'Eres un asistente amigable y servicial.',
-                        'temperature': config.temperature,
-                        'top_p': config.top_p,
-                        'max_tokens': config.max_tokens,
-                        'presence_penalty': config.presence_penalty,
-                        'frequency_penalty': config.frequency_penalty,
                         'stream': False
                     }
                 )
+                response.raise_for_status()
+                result = response.json()
+                response_text = result['response']
                 
-                if response.status_code == 200:
-                    response_data = response.json()
-                    if 'response' in response_data:
-                        assistant_response = response_data['response']
-                        print("\nModelo:", assistant_response)
-                        # Agregar respuesta del asistente al historial
-                        history.add_message("assistant", assistant_response)
-                        stats.add_response_time(response.elapsed.total_seconds())
-                    else:
-                        print("No se recibió una respuesta válida del modelo")
-                else:
-                    if response.status_code == 400:
-                        print("Error: El modelo no pudo procesar la solicitud. Intenta con un mensaje más corto o claro.")
-                    else:
-                        print(f"Error: {response.status_code} - {response.text}")
-                    
-            except requests.exceptions.ConnectionError:
-                print("Error: No se pudo conectar con Ollama. Asegúrate de que el servicio esté corriendo.")
-            except Exception as e:
-                print(f"Error: {str(e)}")
+                # Registrar estadísticas
+                stats.add_response_time(time.time() - start_time)
+                stats.add_tokens(len(response_text.split()))
                 
+                # Mostrar y registrar respuesta
+                print(f"\nAsistente: {response_text}")
+                history.add_message('assistant', response_text)
+                stats.increment_messages()
+                
+            except requests.exceptions.RequestException as e:
+                print(f"\nError al comunicarse con Ollama: {str(e)}")
+                history.add_message('system', f"Error: {str(e)}")
+                continue
+        
         # Exportar conversación
         export_filename = ChatExporter.export_conversation(history, stats)
         print(f"\nConversación exportada a: {export_filename}")
+    except Exception as e:
+        print(f"Error: {str(e)}")
 
 def chat_with_gpt4all():
     """Simple chat interface for GPT4All"""
