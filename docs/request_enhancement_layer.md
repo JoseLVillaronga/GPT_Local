@@ -11,12 +11,49 @@ Propuesta para implementar una capa intermedia inteligente entre el backend actu
 
 ## Arquitectura Propuesta
 
-### 1. Flujo de Datos
+### 1. Flujo de Datos Base
 ```
 Usuario -> Frontend -> Backend -> Capa de Análisis -> Capa de Mejora -> GPT4All -> Frontend
 ```
 
-### 2. Componentes Principales
+### 2. Arquitectura de Procesamiento Dual DeepSeek
+La capa de análisis y mejora utiliza dos modelos DeepSeek en cooperación:
+
+#### a. DeepSeek-R1-Distill-Qwen-1.5B (Análisis Inicial)
+- Ventana contextual extendida (132K tokens)
+- Tiempo de respuesta rápido (~2.63s)
+- Responsabilidades:
+  * Análisis inicial de contexto largo
+  * Procesamiento de documentos extensos
+  * Manejo de historiales de conversación
+  * Pre-procesamiento de referencias
+  * Extracción de información clave
+
+#### b. DeepSeek-R1-Distill-Qwen-14B (Análisis Profundo)
+- Mayor capacidad de razonamiento
+- Comprensión semántica avanzada
+- Responsabilidades:
+  * Toma de decisiones complejas
+  * Selección del modelo final
+  * Análisis profundo de intención
+  * Refinamiento de prompts
+  * Optimización de parámetros
+
+#### Flujo de Cooperación
+```
+Usuario -> Request 
+  -> DeepSeek-1.5B (análisis inicial, contexto largo)
+     -> Extrae información clave
+     -> Identifica referencias relevantes
+     -> Pre-procesa el contexto
+  -> DeepSeek-14B (análisis profundo, decisiones)
+     -> Determina el mejor modelo para responder
+     -> Refina el prompt
+  -> Modelo Final Seleccionado
+-> Respuesta
+```
+
+### 3. Componentes Principales
 
 #### a. Analizador de Contexto (DSPy)
 - Modelo ligero para análisis rápido
@@ -125,59 +162,85 @@ Usuario -> Frontend -> Backend -> Capa de Análisis -> Capa de Mejora -> GPT4All
 
 ### 1. Consulta Técnica con Referencias
 ```python
-# Petición Original
+# Flujo de Procesamiento
 {
-    "model": "Orca 2 (Full)",
-    "messages": [
-        {"role": "user", "content": "¿Cómo implementar autenticación JWT en FastAPI?"}
-    ]
-}
-
-# Petición Mejorada por la Capa Intermedia
-{
-    "model": "Phi-3 Mini",  # Cambiado a modelo técnico
-    "messages": [
-        {
-            "role": "system",
-            "content": "Referencias de Código:\n[Ejemplos de implementación JWT en FastAPI...]"
-        },
-        {
-            "role": "system",
-            "content": "Documentación Relevante:\n[FastAPI Security docs...]"
-        },
-        {"role": "user", "content": "¿Cómo implementar autenticación JWT en FastAPI?"}
-    ],
-    "temperature": 0.3,  # Ajustado para respuesta técnica
-    "max_tokens": 2000
+    # 1. Análisis Inicial (DeepSeek-1.5B)
+    "initial_analysis": {
+        "context_length": 132000,
+        "extracted_references": ["doc1.md", "doc2.py"],
+        "key_concepts": ["JWT", "FastAPI", "authentication"],
+        "complexity": "technical"
+    },
+    
+    # 2. Análisis Profundo (DeepSeek-14B)
+    "deep_analysis": {
+        "selected_model": "Phi-3 Mini",
+        "reasoning": "Consulta técnica específica, requiere precisión",
+        "parameters": {
+            "temperature": 0.3,
+            "max_tokens": 2000
+        }
+    },
+    
+    # 3. Petición Final
+    "final_request": {
+        "model": "Phi-3 Mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Referencias de Código:\n[Ejemplos de implementación JWT en FastAPI...]"
+            },
+            {
+                "role": "system",
+                "content": "Documentación Relevante:\n[FastAPI Security docs...]"
+            },
+            {"role": "user", "content": "¿Cómo implementar autenticación JWT en FastAPI?"}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 2000
+    }
 }
 ```
 
 ### 2. Consulta Analítica con Datos Actualizados
 ```python
-# Petición Original
+# Flujo de Procesamiento
 {
-    "model": "Orca 2 (Full)",
-    "messages": [
-        {"role": "user", "content": "Analiza las tendencias actuales en IA generativa"}
-    ]
-}
-
-# Petición Mejorada
-{
-    "model": "Llama 3.1 8B",  # Cambiado para análisis profundo
-    "messages": [
-        {
-            "role": "system",
-            "content": "Datos Actualizados:\n[Últimas estadísticas y tendencias...]"
-        },
-        {
-            "role": "system",
-            "content": "Referencias Académicas:\n[Papers relevantes...]"
-        },
-        {"role": "user", "content": "Analiza las tendencias actuales en IA generativa"}
-    ],
-    "temperature": 0.7,
-    "max_tokens": 3000
+    # 1. Análisis Inicial (DeepSeek-1.5B)
+    "initial_analysis": {
+        "context_length": 132000,
+        "extracted_sources": ["recent_papers", "trend_data", "news"],
+        "key_topics": ["AI generativa", "tendencias", "avances"],
+        "complexity": "analytical"
+    },
+    
+    # 2. Análisis Profundo (DeepSeek-14B)
+    "deep_analysis": {
+        "selected_model": "Llama 3.1 8B",
+        "reasoning": "Análisis complejo, requiere comprensión profunda",
+        "parameters": {
+            "temperature": 0.7,
+            "max_tokens": 3000
+        }
+    },
+    
+    # 3. Petición Final
+    "final_request": {
+        "model": "Llama 3.1 8B",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Datos Actualizados:\n[Últimas estadísticas y tendencias...]"
+            },
+            {
+                "role": "system",
+                "content": "Referencias Académicas:\n[Papers relevantes...]"
+            },
+            {"role": "user", "content": "Analiza las tendencias actuales en IA generativa"}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 3000
+    }
 }
 ```
 
