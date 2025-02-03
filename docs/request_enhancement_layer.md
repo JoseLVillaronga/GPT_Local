@@ -348,6 +348,61 @@ ENHANCEMENT_CONFIG = {
 - Estadísticas de uso
 - Retroalimentación de usuarios
 
+## Optimización de Búsqueda Semántica
+
+### 1. Procesamiento y Almacenamiento
+El sistema utiliza una estrategia optimizada de procesamiento y búsqueda semántica que maximiza la eficiencia:
+
+#### a. Criterios de Segmentación
+- Descarte de textos menores a 2,500 caracteres
+- Segmentación de textos en porciones de 5,000-6,000 caracteres
+- Preservación de la integridad semántica de los segmentos
+
+#### b. Estructura de Almacenamiento en MongoDB
+```json
+{
+    "texto": "segmento_de_5000_chars...",
+    "embedding": vector_embedding,
+    "longitud": longitud_segmento,
+    "documento_origen": "nombre_documento",
+    "posicion": n  // para mantener orden
+}
+```
+
+### 2. Proceso de Búsqueda Eficiente
+
+#### a. Uso de Embeddings Ligeros
+- Implementación con sentence-transformers (all-MiniLM-L6-v2)
+- Pre-cálculo de embeddings en el almacenamiento
+- Búsqueda rápida por similitud coseno
+- No requiere LLM para la búsqueda
+
+#### b. Flujo de Proceso
+1. Conversión de consulta a embedding
+2. Búsqueda por similitud vectorial
+3. Recuperación directa del segmento relevante
+4. Uso del segmento como referencia en el chat
+
+### 3. Ventajas del Enfoque
+
+#### a. Eficiencia Computacional
+- Embeddings pre-calculados
+- Búsqueda vectorial rápida
+- Minimización de procesamiento en tiempo real
+- Uso eficiente de recursos
+
+#### b. Calidad de Resultados
+- Segmentos de tamaño óptimo para Phi-3 Mini
+- Preservación del contexto original
+- Coherencia semántica en los segmentos
+- Preparación directa para uso en chat
+
+#### c. Escalabilidad
+- Procesamiento por lotes eficiente
+- Almacenamiento optimizado
+- Búsqueda rápida independiente del tamaño de la colección
+- Fácil actualización de contenido
+
 ## Plan de Implementación Detallado
 
 ### Fase 1: Preparación (2-3 semanas)
