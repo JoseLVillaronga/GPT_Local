@@ -1,1 +1,4 @@
 #chat_history/*.md
+test_buscador/venv/*
+test_buscador/venv/
+test_buscador/.env
