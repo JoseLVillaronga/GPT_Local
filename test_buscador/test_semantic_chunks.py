@@ -3,6 +3,9 @@ import subprocess
 import numpy as np
 from typing import List, Dict, Any
 import json
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 def instalar_paquete(paquete):
     try:
@@ -130,9 +133,10 @@ class SemanticChunkManager:
         return list(self.collection.aggregate(pipeline))
 
 def main():
+
     # Ejemplo de uso
     manager = SemanticChunkManager(
-        mongodb_uri="mongodb://Admin:sloch1618@localhost:27017/",
+        mongodb_uri=(f"mongodb://{os.getenv('MONGO_USER')}:{os.getenv('MONGO_PASS')}@{os.getenv('MONGO_HOST')}:27017/"),
         db_name="GPT_Local",
         collection_name="semantic_chunks"
     )
