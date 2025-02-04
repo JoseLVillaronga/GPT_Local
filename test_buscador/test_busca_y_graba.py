@@ -1,9 +1,12 @@
 import sys
+import os
+from dotenv import load_dotenv
 import subprocess
 from pymongo import MongoClient
 import buscador_internet as busca
 import extractor_pdf as pdf_ext
 import extractor_html as html_ext
+load_dotenv()
 
 def instalar_paquete(paquete):
     try:
@@ -41,12 +44,21 @@ def segment_text(text: str, min_size: int = 2500, chunk_size: int = 5500):
     return chunks
 
 # Define las credenciales de acceso a la base de datos
-usuario = 'Admin'
-password = 'sloch1618'
+try:
+    usuario = os.getenv('MONGO_USER')
+    password = os.getenv('MONGO_PASS')
+    host_mongo = os.getenv('MONGO_HOST')
+    # Verifica que las variables de entorno estén definidas
+    if not usuario or not password or not host_mongo:
+        raise EnvironmentError("Las variables de entorno MONGO_USER, MONGO_PASS y MONGO_HOST deben estar definidas.")
+except EnvironmentError as e:
+    print(f"Error al obtener las credenciales de la base de datos: {e}")
+    # Aquí puedes manejar el error, por ejemplo, terminando el programa o usando valores por defecto
+    raise
+
 
 # Define la URL de conexión
-client = MongoClient(f'mongodb://{usuario}:{password}@localhost:27017/')
-
+client = MongoClient(f'mongodb://{usuario}:{password}@{host_mongo}:27017/')
 # Seleccionar la base de datos
 db = client['GPT_Local']
 
